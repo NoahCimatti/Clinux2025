@@ -1,8 +1,9 @@
 #include "windowclient.h"
 #include "ui_windowclient.h"
 #include <QMessageBox>
-#include "dialogmodification.h"
+#include "Modif/dialogmodification.h"
 #include <unistd.h>
+#include "protocole.h"
 
 extern WindowClient *w;
 
@@ -32,8 +33,42 @@ WindowClient::WindowClient(QWidget *parent):QMainWindow(parent),ui(new Ui::Windo
     // Attachement à la mémoire partagée
 
     // Armement des signaux
+    // SIGUSR1 :
+    struct sigaction sa_sigusr1;
+    sa_sigusr1.sa_handler = handlerSIGUSR1;
+    sigemptyset(&sa_sigusr1.sa_mask);
+    sa_sigusr1.sa_flags = 0;
+    if (sigaction(SIGUSR1, &sa_sigusr1, NULL) == -1) 
+    { 
+      perror("sigaction de SIGUSR1"); 
+      exit(1); 
+    }
+
+    // SIGUSR2 :
+    struct sigaction sa_sigusr2;
+    sa_sigusr2.sa_handler = handlerSIGUSR2;
+    sigemptyset(&sa_sigusr2.sa_mask);
+    sa_sigusr2.sa_flags = 0;
+    if (sigaction(SIGUSR2, &sa_sigusr2, NULL) == -1) 
+    { 
+      perror("sigaction de SIGUSR2"); 
+      exit(1); 
+    }
 
     // Envoi d'une requete de connexion au serveur
+    fprintf(stderr,"(CLIENT %d) Envoi requete CONNEXION au serveur\n",getpid());
+    MESSAGE connectCLIENT;
+    connectCLIENT.type = 1;
+    connectCLIENT.expediteur = getpid();
+    connectCLIENT.requete = CONNECT;
+
+    if (msgsnd(idQ,&connectCLIENT,sizeof(MESSAGE)-sizeof(long),0) == -1)
+    {
+        perror("(CLIENT) Erreur envoi requete CONNECT");
+        exit(1);
+    }
+    fprintf(stderr,"Processus %d a envoye un message d'identification de type CONNECT au serveur avec succes\n",getpid());
+
 }
 
 WindowClient::~WindowClient()
@@ -330,6 +365,21 @@ void WindowClient::closeEvent(QCloseEvent *event)
 {
     // TO DO
 
+    //envoie d'une requete DECONNECT au serveur
+    fprintf(stderr,"(CLIENT %d) Envoi requete DECONNECT au serveur\n",getpid());
+    MESSAGE disconnectCLIENT;
+    disconnectCLIENT.type = 1;
+    disconnectCLIENT.expediteur = getpid();
+    disconnectCLIENT.requete = DECONNECT;
+    if (msgsnd(idQ,&disconnectCLIENT,sizeof(MESSAGE)-sizeof(long),0) == -1)
+    {
+        perror("(CLIENT) Erreur envoi requete DECONNECT");
+        exit(1);
+    }
+    fprintf(stderr,"Processus %d a envoye un message de DECONNECT au serveur avec succes\n",getpid());
+
+
+
     QApplication::exit();
 }
 
@@ -338,19 +388,57 @@ void WindowClient::closeEvent(QCloseEvent *event)
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void WindowClient::on_pushButtonLogin_clicked()
 {
-    // TO DO
+  MESSAGE loginCLIENT;
+  loginCLIENT.type = 1;
+  loginCLIENT.expediteur = getpid();
+  loginCLIENT.requete = LOGIN;
+  loginCLIENT.data1= isNouveauChecked();
+  strcpy(loginCLIENT.data2,getNom());
+  strcpy(loginCLIENT.texte,getMotDePasse());
+
+  if( msgsnd(idQ,&loginCLIENT,sizeof(MESSAGE)-sizeof(long),0) == -1)
+  {
+      perror("(CLIENT) Erreur envoi requete LOGIN");
+      exit(1);
+  }
+  fprintf(stderr,"Processus %d a envoye un message d'identification de type LOGIN au serveur avec succes\n",getpid());
 
 }
 
 void WindowClient::on_pushButtonLogout_clicked()
 {
-    // TO DO
-    logoutOK();
+  MESSAGE logoutCLIENT;
+  logoutCLIENT.type = 1;
+  logoutCLIENT.expediteur = getpid();
+  logoutCLIENT.requete = LOGOUT;
+  if( msgsnd(idQ,&logoutCLIENT,sizeof(MESSAGE)-sizeof(long),0) == -1)
+  {
+      perror("(CLIENT) Erreur envoi requete LOGOUT");
+      exit(1);
+  }
+  fprintf(stderr,"Processus %d a envoye un message de type LOGOUT au serveur avec succes\n",getpid());
+  logoutOK();
+  logged = false;
 }
 
 void WindowClient::on_pushButtonEnvoyer_clicked()
 {
-    // TO DO
+  const char* message = getAEnvoyer();
+  if (strlen(message) == 0)
+  {
+      QMessageBox::critical(this,"Problème...","Message vide...");
+      return;
+  }
+  MESSAGE m;
+  m.type = 1;
+  m.expediteur = getpid();
+  m.requete = SEND;
+  strcpy(m.data1,"");
+  strncpy(m.texte,texte,sizeof(m.texte)-1);
+  m.texte[sizeof(m.texte)-1] = '\0';
+
+  envoieMessage(&m);
+  setAEnvoyer("");
 }
 
 void WindowClient::on_pushButtonConsulter_clicked()
@@ -396,72 +484,106 @@ void WindowClient::on_pushButtonModifier_clicked()
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void WindowClient::on_checkBox1_clicked(bool checked)
 {
+    const char* nomUtilisateur = getNomRenseignements();
+    //ou 
+    const char* nomUtilisateur = getPersonneConnectee(1);
     if (checked)
     {
         ui->checkBox1->setText("Accepté");
-        // TO DO (etape 2)
+        envoyerAcceptRefuse(nomUtilisateur,ACCEPT_USER);
     }
     else
     {
         ui->checkBox1->setText("Refusé");
-        // TO DO (etape 2)
+        envoyerAcceptRefuse(nomUtilisateur,REFUSE_USER);
     }
 }
 
 void WindowClient::on_checkBox2_clicked(bool checked)
 {
+    const char* nomUtilisateur = getNomRenseignements();
+    //ou 
+    const char* nomUtilisateur = getPersonneConnectee(2);
     if (checked)
     {
         ui->checkBox2->setText("Accepté");
-        // TO DO (etape 2)
+        envoyerAcceptRefuse(nomUtilisateur,ACCEPT_USER);
     }
     else
     {
         ui->checkBox2->setText("Refusé");
-        // TO DO (etape 2)
+        envoyerAcceptRefuse(nomUtilisateur,REFUSE_USER);
     }
 }
 
 void WindowClient::on_checkBox3_clicked(bool checked)
 {
+    const char* nomUtilisateur = getNomRenseignements();
+    //ou 
+    const char* nomUtilisateur = getPersonneConnectee(3);
     if (checked)
     {
         ui->checkBox3->setText("Accepté");
-        // TO DO (etape 2)
+        envoyerAcceptRefuse(nomUtilisateur,ACCEPT_USER);
     }
     else
     {
         ui->checkBox3->setText("Refusé");
-        // TO DO (etape 2)
+        envoyerAcceptRefuse(nomUtilisateur,REFUSE_USER);
     }
 }
 
 void WindowClient::on_checkBox4_clicked(bool checked)
 {
+    const char* nomUtilisateur = getNomRenseignements();
+    //ou 
+    const char* nomUtilisateur = getPersonneConnectee(4);
     if (checked)
     {
         ui->checkBox4->setText("Accepté");
-        // TO DO (etape 2)
+        envoyerAcceptRefuse(nomUtilisateur,ACCEPT_USER);
     }
     else
     {
         ui->checkBox4->setText("Refusé");
-        // TO DO (etape 2)
+        envoyerAcceptRefuse(nomUtilisateur,REFUSE_USER);
     }
 }
 
 void WindowClient::on_checkBox5_clicked(bool checked)
 {
+    const char* nomUtilisateur = getNomRenseignements();
+    //ou 
+    const char* nomUtilisateur = getPersonneConnectee(5);
     if (checked)
     {
         ui->checkBox5->setText("Accepté");
-        // TO DO (etape 2)
+        envoyerAcceptRefuse(nomUtilisateur,ACCEPT_USER);
     }
     else
     {
         ui->checkBox5->setText("Refusé");
-        // TO DO (etape 2)
+        envoyerAcceptRefuse(nomUtilisateur,REFUSE_USER);
     }
+}
+void WindowClient::envoyerAcceptRefuse(const char* nomUtilisateur, int typeRequete)
+{
+  if(!nomUtilisateur || strlen(nomUtilisateur) == 0) return;
+
+  MESSAGE m;
+  m.type = 1;
+  m.expediteur = getpid();
+  m.requete = typeRequete;
+  strcpy(m.data1, nomUtilisateur);
+
+  if( msgsnd(idQ,&m,sizeof(MESSAGE)-sizeof(long),0) == -1)
+  {
+      perror("(CLIENT) Erreur envoi requete ACCEPT_USER/REFUSE_USER");
+      exit(1);
+  }
+  fprintf(stderr, "(CLIENT %d) Envoi %s pour %s\n", getpid(),
+            (typeRequete == ACCEPT_USER) ? "ACCEPT_USER" : "REFUSE_USER",
+            nomUtilisateur);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -469,37 +591,63 @@ void WindowClient::on_checkBox5_clicked(bool checked)
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void handlerSIGUSR1(int sig)
 {
-    MESSAGE m;
-    
-    // ...msgrcv(idQ,&m,...)
-    
+    MESSAGE m,envoye;
+    if(msgrcv(idQ,&m,sizeof(MESSAGE)-sizeof(long),getpid(),0) == -1)
+    {
+        perror("(CLIENT) Erreur de msgrcv");
+        exit(1);
+    }
       switch(m.requete)
       {
         case LOGIN :
-                    if (strcmp(m.data1,"OK") == 0)
-                    {
-                      fprintf(stderr,"(CLIENT %d) Login OK\n",getpid());
-                      w->loginOK();
-                      w->dialogueMessage("Login...",m.texte);
-                      // ...
+                    w->dialogueMessage("Resultat login",m.texte);
+                    if(m.data1 == 1){
+                        w->loginOK();
+                        logged = true;
+                        envoye.type = 1;
+                        envoye.expediteur = getpid();
+                        envoye.requete = CONSULT;
+                        envoye.data1 = 1;
+
+                        if( msgsnd(idQ,&envoye,sizeof(MESSAGE)-sizeof(long),0) == -1)
+                        {
+                            perror("(CLIENT) Erreur envoi requete CONSULT");
+                            exit(1);
+                        }else{
+                            fprintf(stderr,"Processus %d a envoye un message de type CONSULT au serveur avec succes\n",getpid());
+                            logged = false;
+                            break;
+                        } 
                     }
-                    else w->dialogueErreur("Login...",m.texte);
-                    break;
 
         case ADD_USER :
-                    // TO DO
+                    fprintf(stderr,"(CLIENT %d) Reception requete ADD_USER\n",getpid());
+                    for(int i =1; i<=5; i++){
+                        if(strcmp(w->getPersonneConnectee(i),"") == 0){
+                            w->setPersonneConnectee(i,m.data1);
+                            break;
+                        }
+                    }
                     break;
 
         case REMOVE_USER :
-                    // TO DO
+                    fprintf(stderr,"(CLIENT %d) Reception requete REMOVE_USER\n",getpid());
+                    for(int i =1; i<=5; i++){
+                        if(strcmp(w->getPersonneConnectee(i),m.data1) == 0){
+                            w->setPersonneConnectee(i,"");
+                            break;
+                        }
+                    }
                     break;
 
         case SEND :
-                    // TO DO
+                    fprintf(stderr,"(CLIENT %d) Reception requete SEND\n",getpid());
+                    w->ajouteMessage(m.data1,m.texte);
                     break;
 
         case CONSULT :
                   // TO DO
                   break;
+        case 
       }
 }
